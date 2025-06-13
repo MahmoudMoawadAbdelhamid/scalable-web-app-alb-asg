@@ -1,34 +1,68 @@
-  WebAppSecurityGroup:
-    Type: AWS::EC2::SecurityGroup
+  ALB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
     Properties:
-      GroupDescription: Allow HTTP and SSH access
-      VpcId: !Ref VPC
-      SecurityGroupIngress:
-        - IpProtocol: tcp
-          FromPort: 22
-          ToPort: 22
-          CidrIp: 0.0.0.0/0
-        - IpProtocol: tcp
-          FromPort: 80
-          ToPort: 80
-          CidrIp: 0.0.0.0/0
+      Name: WebAppALB
+      Subnets:
+        - !Ref PublicSubnet1
+        - !Ref PublicSubnet2
+      SecurityGroups:
+        - !Ref WebAppSecurityGroup
+      Scheme: internet-facing
+      LoadBalancerAttributes:
+        - Key: idle_timeout.timeout_seconds
+          Value: '60'
 
-  LaunchTemplate:
-    Type: AWS::EC2::LaunchTemplate
+  ALBListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
     Properties:
-      LaunchTemplateData:
-        ImageId: ami-0c55b159cbfafe1f0  # Replace this with your region's Amazon Linux 2 AMI
-        InstanceType: t2.micro
-        KeyName: !Ref KeyName
-        SecurityGroupIds:
-          - !Ref WebAppSecurityGroup
-        UserData:
-          Fn::Base64: !Sub |
-            #!/bin/bash
-            yum update -y
-            yum install -y python3 git
-            pip3 install flask
-            cd /home/ec2-user
-            git clone https://github.com/MahmoudMoawadAbdelhamid/scalable-web-app-alb-asg.git
-            cd scalable-web-app-alb-asg/source/app
-            FLASK_APP=app.py nohup flask run --host=0.0.0.0 &
+      LoadBalancerArn: !Ref ALB
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: fixed-response
+          FixedResponseConfig:
+            StatusCode: '200'
+            ContentType: text/plain
+            MessageBody: OK
+
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      VpcId: !Ref VPC
+      Protocol: HTTP
+      Port: 5000
+      TargetType: instance
+      HealthCheckPath: /
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 5
+      Matcher:
+        HttpCode: 200
+
+  ALBListenerForward:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+      Conditions:
+        - Field: path-pattern
+          Values: [/]
+      ListenerArn: !Ref ALBListener
+      Priority: 1
+
+  AutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      VPCZoneIdentifier:
+        - !Ref PublicSubnet1
+        - !Ref PublicSubnet2
+      LaunchTemplate:
+        LaunchTemplateId: !Ref LaunchTemplate
+        Version: !GetAtt LaunchTemplate.LatestVersionNumber
+      MinSize: 1
+      MaxSize: 3
+      DesiredCapacity: 2
+      TargetGroupARNs:
+        - !Ref TargetGroup
